@@ -17,11 +17,13 @@
 # along with SickRage.  If not, see <http://www.gnu.org/licenses/>.
 # pylint: disable=W0703
 
-import urllib
-import time
-import datetime
 import os
 import re
+import time
+import urllib
+import datetime
+import traceback
+import xmltodict
 
 import sickbeard
 from sickbeard import classes
@@ -88,9 +90,6 @@ class NewznabProvider(generic.NZBProvider):
             return self.getID() + '.png'
         return 'newznab.png'
 
-    def _getURL(self, url, post_data=None, params=None, timeout=30, json=False):
-        return self.getURL(url, post_data=post_data, params=params, timeout=timeout, json=json)
-
     def get_newznab_categories(self):
         """
         Uses the newznab provider url and apikey to get the capabilities.
@@ -106,24 +105,29 @@ class NewznabProvider(generic.NZBProvider):
         if self.needs_auth and self.key:
             params['apikey'] = self.key
 
+        url = "%s/api?%s" % (self.url, urllib.urlencode(params))
         try:
-            data = self.cache.getRSSFeed("%s/api?%s" % (self.url, urllib.urlencode(params)))
+            data = self.getURL(url)
         except Exception:
-            logger.log(u"Error getting html for [%s]" %
-                       ("%s/api?%s" % (self.url, '&'.join("%s=%s" % (x, y) for x, y in params.iteritems()))), logger.WARNING)
-            return (False, return_categories, "Error getting html for [%s]" %
-                    ("%s/api?%s" % (self.url, '&'.join("%s=%s" % (x, y) for x, y in params.iteritems()))))
+            print traceback.format_exc()
+            failure_string = u"Error getting html for [%s]" % url
+            logger.log(failure_string, logger.WARNING)
+            return (False, return_categories, failure_string)
 
+        data = xmltodict.parse(data)
         if not self._checkAuthFromData(data):
             logger.log(u"Error parsing xml", logger.DEBUG)
             return False, return_categories, "Error parsing xml for [%s]" % (self.name)
 
+        # print data
         try:
-            for category in data.feed.categories:
-                if category.get('name') == 'TV':
-                    return_categories.append(category)
-                    for subcat in category.subcats:
-                        return_categories.append(subcat)
+            for category in data['caps']['categories']['category']:
+                print category
+                if category['@name'] == 'TV':
+                    print 'IS TV'
+                    return_categories.append({'id': category['@id'], 'name': category['@name']})
+                    for subcat in category['subcat']:
+                        return_categories.append({'id': subcat['@id'], 'name': subcat['@name']})
         except Exception:
             logger.log(u"Error parsing result for [%s]" % (self.name),
                        logger.DEBUG)
@@ -203,7 +207,7 @@ class NewznabProvider(generic.NZBProvider):
 
     def _checkAuthFromData(self, data):
 
-        if 'feed' not in data or 'entries' not in data:
+        if ('feed' not in data or 'entries' not in data) and ('caps' not in data):
             return self._checkAuth()
 
         try:
@@ -277,12 +281,13 @@ class NewznabProvider(generic.NZBProvider):
             if not self._checkAuthFromData(data):
                 break
 
-            for item in data['entries'] or []:
+            if 'entries' in data:
+                for item in data['entries'] or []:
 
-                (title, url) = self._get_title_and_url(item)
+                    (title, url) = self._get_title_and_url(item)
 
-                if title and url:
-                    results.append(item)
+                    if title and url:
+                        results.append(item)
 
             # get total and offset attribs
             try:
